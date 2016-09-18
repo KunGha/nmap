@@ -124,6 +124,10 @@
 
 #include "nbase.h"
 
+#ifdef HAVE_CONFIG_H
+#include "nmap_config.h"
+#endif
+
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -133,7 +137,16 @@
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/evp.h>
+#include <openssl/err.h>
+
+#if (OPENSSL_VERSION_NUMBER >= 0x10100000L) && !defined LIBRESSL_VERSION_NUMBER
+/* Technically some of these things were added in 0x10100006
+ * but that was pre-release. */
+#define HAVE_OPAQUE_STRUCTS 1
+#endif
+
 
 extern "C"
 {
@@ -257,6 +270,54 @@ static void x509_name_to_table(lua_State *L, X509_NAME *name)
 
     lua_settable(L, -3);
   }
+}
+
+static bool x509_extensions_to_table(lua_State *L, const STACK_OF(X509_EXTENSION) *exts)
+{
+  if (sk_X509_EXTENSION_num(exts) <= 0)
+    return false;
+
+  lua_newtable(L);
+
+  for (int i = 0; i < sk_X509_EXTENSION_num(exts); i++) {
+    ASN1_OBJECT *obj;
+    X509_EXTENSION *ext;
+    char *value = NULL;
+    BIO *out;
+
+    ext = sk_X509_EXTENSION_value(exts, i);
+    obj = X509_EXTENSION_get_object(ext);
+
+    lua_newtable(L);
+    char objname[256];
+    long len = 0;
+    len = OBJ_obj2txt(objname, 256, obj, 0);
+    lua_pushlstring(L, objname, MIN(len, 256));
+    lua_setfield(L, -2, "name");
+
+
+    if (X509_EXTENSION_get_critical(ext)) {
+      lua_pushboolean(L, true);
+      lua_setfield(L, -2, "critical");
+    }
+
+    out = BIO_new(BIO_s_mem());
+    if (!X509V3_EXT_print(out, ext, 0, 0)) {
+      lua_pushboolean(L, true);
+      lua_setfield(L, -2, "error");
+    }
+    else {
+      len = BIO_get_mem_data(out, &value);
+      lua_pushlstring(L, value, len);
+      lua_setfield(L, -2, "value");
+    }
+    BIO_free_all(out);
+
+    lua_seti(L, -2, i+1);
+  }
+
+  return true;
+
 }
 
 /* Parse as a decimal integer the len characters starting at s. This function
@@ -455,16 +516,15 @@ int lua_push_ecdhparams(lua_State *L, EVP_PKEY *pubkey) {
     nid = EC_METHOD_get_field_type(EC_GROUP_method_of(group));
     if (nid == NID_X9_62_prime_field) {
       lua_pushstring(L, "explicit_prime");
-      lua_setfield(L, -2, "ec_curve_type");
     }
     else if (nid == NID_X9_62_characteristic_two_field) {
       lua_pushstring(L, "explicit_char2");
-      lua_setfield(L, -2, "ec_curve_type");
     }
     else {
       /* Something weird happened. */
-      return luaL_error(L, "Unknown EC field type in certificate.");
+      lua_pushstring(L, "UNKNOWN");
     }
+    lua_setfield(L, -2, "ec_curve_type");
   }
   lua_setfield(L, -2, "curve_params");
   EC_KEY_free(ec_key);
@@ -528,10 +588,10 @@ static int parse_ssl_cert(lua_State *L, X509 *cert)
     lua_setfield(L, -2, "subject");
   }
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-  const char *sig_algo = OBJ_nid2ln(OBJ_obj2nid(cert->sig_alg->algorithm));
-#else
+#if HAVE_OPAQUE_STRUCTS
   const char *sig_algo = OBJ_nid2ln(X509_get_signature_nid(cert));
+#else
+  const char *sig_algo = OBJ_nid2ln(OBJ_obj2nid(cert->sig_alg->algorithm));
 #endif
   lua_pushstring(L, sig_algo);
   lua_setfield(L, -2, "sig_algorithm");
@@ -548,12 +608,25 @@ static int parse_ssl_cert(lua_State *L, X509 *cert)
   cert_pem_to_string(L, cert);
   lua_setfield(L, -2, "pem");
 
-  pubkey = X509_get_pubkey(cert);
-  lua_newtable(L);
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-  pkey_type = EVP_PKEY_type(pubkey->type);
+#if HAVE_OPAQUE_STRUCTS
+  if (x509_extensions_to_table(L, X509_get0_extensions(cert))) {
 #else
+  if (x509_extensions_to_table(L, cert->cert_info->extensions)) {
+#endif
+    lua_setfield(L, -2, "extensions");
+  }
+
+  pubkey = X509_get_pubkey(cert);
+  if (pubkey == NULL) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "Error parsing cert: %s", ERR_error_string(ERR_get_error(), NULL));
+    return 2;
+  }
+  lua_newtable(L);
+#if HAVE_OPAQUE_STRUCTS
   pkey_type = EVP_PKEY_base_id(pubkey);
+#else
+  pkey_type = EVP_PKEY_type(pubkey->type);
 #endif
 #ifdef HAVE_OPENSSL_EC
   if (pkey_type == EVP_PKEY_EC) {
@@ -567,22 +640,18 @@ static int parse_ssl_cert(lua_State *L, X509 *cert)
     bignum_data_t * data = (bignum_data_t *) lua_newuserdata( L, sizeof(bignum_data_t));
     luaL_getmetatable( L, "BIGNUM" );
     lua_setmetatable( L, -2 );
-  #if OPENSSL_VERSION_NUMBER < 0x10100000L
-    data->bn = rsa->e;
-  #elif OPENSSL_VERSION_NUMBER < 0x10100006L
-    BIGNUM *n, *e, *d;
-    RSA_get0_key(rsa, &n, &e, &d);
-    data->bn = e;
-  #else
+  #if HAVE_OPAQUE_STRUCTS
     const BIGNUM *n, *e, *d;
     RSA_get0_key(rsa, &n, &e, &d);
     data->bn = (BIGNUM*) e;
+  #else
+    data->bn = rsa->e;
   #endif
     lua_setfield(L, -2, "exponent");
   }
   lua_pushstring(L, pkey_type_to_string(pkey_type));
   lua_setfield(L, -2, "type");
-  lua_pushnumber(L, EVP_PKEY_bits(pubkey));
+  lua_pushinteger(L, EVP_PKEY_bits(pubkey));
   lua_setfield(L, -2, "bits");
   lua_setfield(L, -2, "pubkey");
   EVP_PKEY_free(pubkey);

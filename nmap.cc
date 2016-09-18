@@ -500,7 +500,9 @@ public:
     this->pre_max_retries       = -1;
     this->pre_host_timeout      = -1;
     this->iflist                = false;
+    this->advanced              = false;
     this->af                    = AF_UNSPEC;
+    this->decoys                = false;
   }
 
   // Pre-specified timing parameters.
@@ -512,9 +514,9 @@ public:
   int   pre_max_retries;
   long  pre_host_timeout;
   char  *machinefilename, *kiddiefilename, *normalfilename, *xmlfilename;
-  bool  iflist;
+  bool  iflist, decoys, advanced;
   char  *exclude_spec, *exclude_file;
-  char  *spoofSource;
+  char  *spoofSource, *decoy_arguments;
   const char *spoofmac;
   int af;
   std::vector<std::string> verbose_out;
@@ -540,7 +542,7 @@ static void test_file_name(const char *filename, const char *option) {
 }
 
 void parse_options(int argc, char **argv) {
-  char *p, *q;
+  char *p;
   int arg;
   long l;
   double d;
@@ -680,6 +682,8 @@ void parse_options(int argc, char **argv) {
     {"script_args_file", required_argument, 0, 0},
     {"script-help", required_argument, 0, 0},
     {"script_help", required_argument, 0, 0},
+    {"script-timeout", required_argument, 0, 0},
+    {"script_timeout", required_argument, 0, 0},
 #endif
     {"ip_options", required_argument, 0, 0},
     {"ip-options", required_argument, 0, 0},
@@ -718,6 +722,11 @@ void parse_options(int argc, char **argv) {
       } else if (optcmp(long_options[option_index].name, "script-help") == 0) {
         o.scripthelp = true;
         o.chooseScripts(optarg);
+      } else if (optcmp(long_options[option_index].name, "script-timeout") == 0) {
+        l = tval2secs(optarg);
+        if ( l <= 0 )
+          fatal("Bogus --script-timeout argument specified");
+        o.scripttimeout = l;
       } else
 #endif
         if (optcmp(long_options[option_index].name, "max-os-tries") == 0) {
@@ -1049,14 +1058,7 @@ void parse_options(int argc, char **argv) {
 #endif /* !HAVE_IPV6 */
       break;
     case 'A':
-      o.servicescan = true;
-#ifndef NOLUA
-      o.script = 1;
-#endif
-      if (o.isr00t) {
-        o.osscan++;
-        o.traceroute = true;
-      }
+      delayed_options.advanced = true;
       break;
     case 'b':
       o.bouncescan++;
@@ -1065,52 +1067,7 @@ void parse_options(int argc, char **argv) {
       }
       break;
     case 'D':
-      p = optarg;
-      do {
-        q = strchr(p, ',');
-        if (q)
-          *q = '\0';
-        if (!strcasecmp(p, "me")) {
-          if (o.decoyturn != -1)
-            fatal("Can only use 'ME' as a decoy once.\n");
-          o.decoyturn = o.numdecoys++;
-        } else if (!strcasecmp(p, "rnd") || !strncasecmp(p, "rnd:", 4)) {
-          int i = 1;
-
-          /* 'rnd:' is allowed and just gives them one */
-          if (strlen(p) > 4)
-            i = atoi(&p[4]);
-
-          if (i < 1)
-            fatal("Bad 'rnd' decoy \"%s\"", p);
-
-          if (o.numdecoys + i >= MAX_DECOYS - 1)
-            fatal("You are only allowed %d decoys (if you need more redefine MAX_DECOYS in nmap.h)", MAX_DECOYS);
-
-          while (i--) {
-            do {
-              o.decoys[o.numdecoys].s_addr = get_random_u32();
-            } while (ip_is_reserved(&o.decoys[o.numdecoys]));
-            o.numdecoys++;
-          }
-        } else {
-          if (o.numdecoys >= MAX_DECOYS - 1)
-            fatal("You are only allowed %d decoys (if you need more redefine MAX_DECOYS in nmap.h)", MAX_DECOYS);
-
-          /* Try to resolve it */
-          struct sockaddr_in decoytemp;
-          size_t decoytemplen = sizeof(struct sockaddr_in);
-          int rc = resolve(p, 0, (sockaddr_storage*)&decoytemp, &decoytemplen, AF_INET);
-          if (rc != 0)
-            fatal("Failed to resolve decoy host \"%s\": %s", p, gai_strerror(rc));
-          o.decoys[o.numdecoys] = decoytemp.sin_addr;
-          o.numdecoys++;
-        }
-        if (q) {
-          *q = ',';
-          p = q + 1;
-        }
-      } while (q);
+      delayed_options.decoy_arguments = optarg;
       break;
     case 'd':
       if (optarg && isdigit(optarg[0])) {
@@ -1474,6 +1431,16 @@ void  apply_delayed_options() {
   }
   delayed_options.verbose_out.clear();
 
+  if (delayed_options.advanced) {
+    o.servicescan = true;
+#ifndef NOLUA
+    o.script = 1;
+#endif
+    if (o.isr00t) {
+      o.osscan++;
+      o.traceroute = true;
+    }
+  }
   if (o.spoofsource) {
     int rc = resolve(delayed_options.spoofSource, 0, &ss, &sslen, o.af());
     if (rc != 0) {
@@ -1602,7 +1569,7 @@ void  apply_delayed_options() {
   }
 
   // Uncomment the following line to use the common lisp port spec test suite
-  //printf("port spec: (%d %d %d %d)\n", ports.tcp_count, ports.udp_count, ports.stcp_count, ports.prot_count); exit(0);
+  printf("port spec: (%d %d %d %d)\n", ports.tcp_count, ports.udp_count, ports.sctp_count, ports.prot_count); exit(0);
 
 #ifdef WIN32
   if (o.sendpref & PACKET_SEND_IP) {
@@ -1690,14 +1657,6 @@ void  apply_delayed_options() {
     error("WARNING: a IP Protocol ping scan was requested, but after excluding requested protocols, none remain. Skipping this scan type.");
 
 
-  /* Set up our array of decoys! */
-  if (o.decoyturn == -1) {
-    o.decoyturn = (o.numdecoys == 0) ?  0 : get_random_uint() % o.numdecoys;
-    o.numdecoys++;
-    for (i = o.numdecoys - 1; i > o.decoyturn; i--)
-      o.decoys[i] = o.decoys[i - 1];
-  }
-
   /* We need to find what interface to route through if:
    * --None have been specified AND
    * --We are root and doing tcp ping OR
@@ -1725,6 +1684,68 @@ void  apply_delayed_options() {
   }
   o.exclude_spec = delayed_options.exclude_spec;
 
+  if (delayed_options.decoy_arguments) {
+    char *p = delayed_options.decoy_arguments, *q;
+    do {
+      q = strchr(p, ',');
+      if (q)
+        *q = '\0';
+      if (!strcasecmp(p, "me")) {
+        if (o.decoyturn != -1)
+          fatal("Can only use 'ME' as a decoy once.\n");
+        o.decoyturn = o.numdecoys++;
+      } else if (!strcasecmp(p, "rnd") || !strncasecmp(p, "rnd:", 4)) {
+        if (delayed_options.af == AF_INET6)
+          fatal("Random decoys can only be used with IPv4");
+        int i = 1;
+
+        /* 'rnd:' is allowed and just gives them one */
+        if (strlen(p) > 4)
+          i = atoi(&p[4]);
+
+        if (i < 1)
+          fatal("Bad 'rnd' decoy \"%s\"", p);
+
+        if (o.numdecoys + i >= MAX_DECOYS - 1)
+          fatal("You are only allowed %d decoys (if you need more redefine MAX_DECOYS in nmap.h)", MAX_DECOYS);
+
+        while (i--) {
+          do {
+            ((struct sockaddr_in *)&o.decoys[o.numdecoys])->sin_addr.s_addr = get_random_u32();
+          } while (ip_is_reserved(&((struct sockaddr_in *)&o.decoys[o.numdecoys])->sin_addr));
+          o.numdecoys++;
+        }
+      } else {
+        if (o.numdecoys >= MAX_DECOYS - 1)
+          fatal("You are only allowed %d decoys (if you need more redefine MAX_DECOYS in nmap.h)", MAX_DECOYS);
+
+        /* Try to resolve it */
+        struct sockaddr_storage decoytemp;
+        size_t decoytemplen = sizeof(struct sockaddr_storage);
+        int rc;
+        if (delayed_options.af == AF_INET6){
+          rc = resolve(p, 0, (sockaddr_storage*)&decoytemp, &decoytemplen, AF_INET6);
+        }
+        else
+          rc = resolve(p, 0, (sockaddr_storage*)&decoytemp, &decoytemplen, AF_INET);
+        if (rc != 0)
+          fatal("Failed to resolve decoy host \"%s\": %s", p, gai_strerror(rc));
+        o.decoys[o.numdecoys] = decoytemp;
+        o.numdecoys++;
+      }
+      if (q) {
+        *q = ',';
+        p = q + 1;
+      }
+    } while (q);
+  }
+  /* Set up host address also in array of decoys! */
+  if (o.decoyturn == -1) {
+    o.decoyturn = (o.numdecoys == 0) ?  0 : get_random_uint() % o.numdecoys;
+    o.numdecoys++;
+    for (i = o.numdecoys - 1; i > o.decoyturn; i--)
+      o.decoys[i] = o.decoys[i - 1];
+  }
 }
 
 int nmap_main(int argc, char *argv[]) {
@@ -1773,11 +1794,13 @@ int nmap_main(int argc, char *argv[]) {
 
   tty_init(); // Put the keyboard in raw mode
 
-  apply_delayed_options();
-
 #ifdef WIN32
+  // Must come after parse_options because of --unprivileged
+  // Must come before apply_delayed_options because it sets o.isr00t
   win_init();
 #endif
+
+  apply_delayed_options();
 
   for (unsigned int i = 0; i < route_dst_hosts.size(); i++) {
     const char *dst;
@@ -2061,7 +2084,7 @@ int nmap_main(int argc, char *argv[]) {
           o.numhosts_up--;
           break;
         }
-        o.decoys[o.decoyturn] = currenths->v4source();
+        o.decoys[o.decoyturn] = currenths->source();
       }
       Targets.push_back(currenths);
     }
@@ -2074,8 +2097,8 @@ int nmap_main(int argc, char *argv[]) {
 
     // Our source must be set in decoy list because nexthost() call can
     // change it (that issue really should be fixed when possible)
-    if (o.af() == AF_INET && o.RawScan())
-      o.decoys[o.decoyturn] = Targets[0]->v4source();
+    if (o.RawScan())
+      o.decoys[o.decoyturn] = Targets[0]->source();
 
     /* I now have the group for scanning in the Targets vector */
 
@@ -2645,23 +2668,23 @@ static void getpts_aux(const char *origexpr, int nested, u8 *porttbl, int range_
       current_range++; /* I don't know why I should allow spaces here, but I will */
 
     if (change_range_type) {
-      if (*current_range == 'T' && *++current_range == ':') {
-        current_range++;
+      if (*current_range == 'T' && *(current_range+1) == ':') {
+        current_range += 2;
         range_type = SCAN_TCP_PORT;
         continue;
       }
-      if (*current_range == 'U' && *++current_range == ':') {
-        current_range++;
+      if (*current_range == 'U' && *(current_range+1) == ':') {
+        current_range += 2;
         range_type = SCAN_UDP_PORT;
         continue;
       }
-      if (*current_range == 'S' && *++current_range == ':') {
-        current_range++;
+      if (*current_range == 'S' && *(current_range+1) == ':') {
+        current_range += 2;
         range_type = SCAN_SCTP_PORT;
         continue;
       }
-      if (*current_range == 'P' && *++current_range == ':') {
-        current_range++;
+      if (*current_range == 'P' && *(current_range+1) == ':') {
+        current_range += 2;
         range_type = SCAN_PROTOCOLS;
         continue;
       }

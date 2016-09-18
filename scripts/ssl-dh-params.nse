@@ -90,7 +90,7 @@ Opportunistic STARTTLS sessions are established on services that support them.
 -- |_      http://www2.esentire.com/TLSUnjammedWP
 
 author = "Jacob Gajek"
-license = "Same as Nmap--See http://nmap.org/book/man-legal.html"
+license = "Same as Nmap--See https://nmap.org/book/man-legal.html"
 categories = {"vuln", "safe"}
 
 
@@ -672,7 +672,7 @@ local function get_dhe_params(host, port, protocol, ciphers)
     -- Only try next chunk if current chunk was rejected
     if cipher and packed then
       local info = tls.cipher_info(cipher)
-      local data = tls.KEX_ALGORITHMS[info.kex].server_key_exchange(packed)
+      local data = tls.KEX_ALGORITHMS[info.kex].server_key_exchange(packed, protocol)
       return cipher, data.dhparams
     end
   end

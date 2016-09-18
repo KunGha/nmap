@@ -146,17 +146,7 @@
 
 extern NmapOps o;
 
-#ifdef WIN32
-#include "pcap-int.h"
-#endif
-
 static PacketCounter PktCt;
-
-
-
-
-
-
 
 /* Create a raw socket and do things that always apply to raw sockets:
     * Set SO_BROADCAST.
@@ -839,7 +829,7 @@ int send_tcp_raw_decoys(int sd, const struct eth_nfo *eth,
 
   for (decoy = 0; decoy < o.numdecoys; decoy++)
     if (send_tcp_raw(sd, eth,
-                     &o.decoys[decoy], victim,
+                     &((struct sockaddr_in *)&o.decoys[decoy])->sin_addr, victim,
                      ttl, df,
                      ipopt, ipoptlen,
                      sport, dport,
@@ -956,7 +946,7 @@ int send_udp_raw_decoys(int sd, const struct eth_nfo *eth,
   int decoy;
 
   for (decoy = 0; decoy < o.numdecoys; decoy++)
-    if (send_udp_raw(sd, eth, &o.decoys[decoy], victim,
+    if (send_udp_raw(sd, eth, &((struct sockaddr_in *)&o.decoys[decoy])->sin_addr, victim,
                      ttl, ipid, ipops, ipoptlen,
                      sport, dport, data, datalen) == -1)
       return -1;
@@ -1669,18 +1659,6 @@ char *readip_pcap(pcap_t *pd, unsigned int *len, long to_usec,
   }
 
   do {
-#ifdef WIN32
-    long to_left;
-
-    if (to_usec > 0) {
-      gettimeofday(&tv_end, NULL);
-      to_left = MAX(1, (to_usec - TIMEVAL_SUBTRACT(tv_end, tv_start)) / 1000);
-    } else {
-      to_left = 1;
-    }
-    // Set the timeout (BUGBUG: this is cheating)
-    PacketSetReadTimeout(pd->adapter, to_left);
-#endif
 
     p = NULL;
     /* It may be that protecting this with !pcap_selectable_fd_one_to_one is not

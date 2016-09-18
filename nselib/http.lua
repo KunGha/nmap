@@ -33,7 +33,7 @@
 --  all = http.pipeline_add('/monkeys', nil, all, 'HEAD')
 --
 --  -- Perform all three requests as parallel as Nmap is able to
---  local results = http.pipeline('nmap.org', 80, all)
+--  local results = http.pipeline_go('nmap.org', 80, all)
 --</code>
 --
 -- At this point, <code>results</code> is an array with three elements. Each element
@@ -226,18 +226,6 @@ local function get_quoted_string(s, offset, crlf)
     i = i + 1
   end
   return nil
-end
-
--- Get a ( token | quoted-string ) starting at offset.
--- @return the first index following the token or quoted-string, or nil if
--- nothing was found.
--- @return the token or quoted-string.
-local function get_token_or_quoted_string(s, offset, crlf)
-  if s:sub(offset, offset) == "\"" then
-    return get_quoted_string(s, offset)
-  else
-    return get_token(s, offset)
-  end
 end
 
 -- Returns the index just past the end of LWS.
@@ -1299,7 +1287,7 @@ function generic_request(host, port, method, path, options)
 
     local auth_blob = "NTLMSSP\x00" .. -- NTLM signature
     "\x01\x00\x00\x00" .. -- NTLM Type 1 message
-    bin.pack("<I", 0xa208b207) .. -- flags 56, 128, Version, Extended Security, Always Sign, Workstation supplied, Domain Supplied, NTLM Key, OEM, Unicode 
+    bin.pack("<I", 0xa208b207) .. -- flags 56, 128, Version, Extended Security, Always Sign, Workstation supplied, Domain Supplied, NTLM Key, OEM, Unicode
     bin.pack("<SSISSI",#workstation_name, #workstation_name, 40 + #hostname, #hostname, #hostname, 40) .. -- Supplied Domain and Workstation
     bin.pack("CC<S", -- OS version info
     5, 1, 2600) .. -- 5.1.2600
@@ -1823,7 +1811,6 @@ end
 -- @return A list of responses, in the same order as the requests were queued.
 --         Each response is a table as described in the module documentation.
 function pipeline_go(host, port, all_requests)
-  stdnse.debug1("Total number of pipelined requests: " .. #all_requests)
   local responses
   local response
   local partial
@@ -1831,10 +1818,11 @@ function pipeline_go(host, port, all_requests)
   responses = {}
 
   -- Check for an empty request
-  if (#all_requests == 0) then
-    stdnse.debug1("Warning: empty set of requests passed to http.pipeline()")
+  if (not all_requests or #all_requests == 0) then
+    stdnse.debug1("Warning: empty set of requests passed to http.pipeline_go()")
     return responses
   end
+  stdnse.debug1("Total number of pipelined requests: " .. #all_requests)
 
   local socket, bopt
 

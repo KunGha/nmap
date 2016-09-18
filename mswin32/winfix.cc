@@ -223,9 +223,9 @@ Resorting to unprivileged (non-administrator) mode.", svcname, ret);
 
 quit_error:
   if (scm != NULL)
-    CloseHandle(scm);
+    CloseServiceHandle(scm);
   if (npf != NULL)
-    CloseHandle(npf);
+    CloseServiceHandle(npf);
 
   return false;
 }
@@ -287,7 +287,7 @@ void win_init()
 	PMIB_IPADDRTABLE pIp = 0;
 	int i;
 	int numipsleft;
-	int pcap_driver;
+	int pcap_driver = PCAP_DRIVER_NONE;
 
 	init_dll_path();
 
