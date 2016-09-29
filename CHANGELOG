@@ -1,5 +1,14 @@
 # Nmap Changelog ($Id$); -*-text-*-
 
+o New service probe and match line for DTLS (Datagram TLS, or TLS over UDP).
+
+o Improved some output filtering to remove or escape carriage returns ('\r')
+  that could allow output spoofing by overwriting portions of the screen. Issue
+  reported by Adam Rutherford. [Daniel Miller]
+
+o [NSE] Fixed a few bad Lua patterns that could result in denial of service due
+  to excessive backtracking. [Adam Rutherford, Daniel Miller]
+
 o Fixed a bug in port specification parsing that could cause extraneous
   'T', 'U', 'S', and 'P' characters to be ignored when they should have
   caused an error. [David Fifield]

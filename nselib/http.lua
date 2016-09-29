@@ -20,7 +20,7 @@
 --
 -- If a script is planning on making a lot of requests, the pipelining functions can
 -- be helpful. <code>pipeline_add</code> queues requests in a table, and
--- <code>pipeline</code> performs the requests, returning the results as an array,
+-- <code>pipeline_go</code> performs the requests, returning the results as an array,
 -- with the responses in the same order as the queries were added. As a simple example:
 --<code>
 --  -- Start by defining the 'all' variable as nil
@@ -1777,7 +1777,7 @@ end
 --                     the first call.
 -- @param method [optional] The HTTP method ('GET', 'HEAD', 'POST', etc).
 --                          Default: 'GET'.
--- @return Table with the pipeline get requests (plus this new one)
+-- @return Table with the pipeline requests (plus this new one)
 -- @see http.pipeline_go
 function pipeline_add(path, options, all_requests, method)
   if(not(validate_options(options))) then
@@ -1810,6 +1810,8 @@ end
 -- @param all_requests A table with all the previously built pipeline requests
 -- @return A list of responses, in the same order as the requests were queued.
 --         Each response is a table as described in the module documentation.
+--         The response list may be either nil or shorter than expected (up to
+--         and including being completely empty) due to communication issues.
 function pipeline_go(host, port, all_requests)
   local responses
   local response
@@ -2611,7 +2613,7 @@ end
 ---Check if the response variable contains the given text.
 --
 -- Response variable could be a return from a http.get, http.post,
--- http.pipeline, etc. The text can be:
+-- http.pipeline_go, etc. The text can be:
 -- * Part of a header ('content-type', 'text/html', '200 OK', etc)
 -- * An entire header ('Content-type: text/html', 'Content-length: 123', etc)
 -- * Part of the body
